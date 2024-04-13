@@ -24,12 +24,16 @@ def avg_brightness(line_points, image_local):
     _sum = 0
     width, height = image_local.shape
     counter = 0
+    avg = 0
     for x, y in line_points:
         if x < width and y < height:
             _sum += image_local[x][y]
             counter += 1
 
-    return _sum / counter
+    if counter != 0:
+        avg = _sum // counter
+
+    return avg
 
 
 def bresenham_line(x1, y1, x2, y2):
@@ -70,11 +74,11 @@ def bresenham_line(x1, y1, x2, y2):
 
 
 @st.cache_data
-def radon_transform(number_of_detectors_local, angle_local, span_local, image_local):
-    r = (image_local.shape[0] // 2) - 1
-    sinogram = np.zeros((int(360 / angle_local), number_of_detectors_local), dtype=np.float32)
+def radon_transform(number_of_detectors_local, iterations_local, span_local, image_local):
+    r = min((image_local.shape[1] // 2), (image_local.shape[0] // 2)) - 1
+    sinogram = np.zeros((iterations_local, number_of_detectors_local))
     iterations_sinogram = []
-    alpha_steps = np.linspace(0, 360, int(360 / angle_local))
+    alpha_steps = np.linspace(0, 359, iterations_local)
 
     for i, alpha in enumerate(alpha_steps):
         emitter_x, emitter_y = emitter_cords(r, alpha, image_local)
@@ -88,16 +92,16 @@ def radon_transform(number_of_detectors_local, angle_local, span_local, image_lo
 
 
 @st.cache_data
-def inverse_radon(sinogram, angle_local, image_local, span_local, number_of_detectors_local, filters=False):
+def inverse_radon(sinogram, iterations_local, image_local, span_local, number_of_detectors_local, filters=False):
     if filters:
         for i, sins in enumerate(sinogram):
             sinogram[i] = filtered(sins)
 
-    r = (image_local.shape[0] // 2) - 1
+    r = min((image_local.shape[1] // 2), (image_local.shape[0] // 2)) - 1
 
     width, height = image_local.shape
-    output_image = np.zeros((width, height), dtype=np.float32)
-    alpha_steps = np.linspace(0, 360, int(360 / angle_local))
+    output_image = np.zeros((width, height))
+    alpha_steps = np.linspace(0, 359, iterations_local)
     image_steps = []
 
     for i, alpha in enumerate(alpha_steps):
@@ -114,7 +118,7 @@ def inverse_radon(sinogram, angle_local, image_local, span_local, number_of_dete
 
 
 def filtered(sinogram):
-    kernel_size = 15
+    kernel_size = 21
     kernel = []
     for k in range(-kernel_size // 2, kernel_size // 2):
         if k == 0:
@@ -134,9 +138,13 @@ def normalize(data):
     return (data - np.min(data)) / (np.max(data) - np.min(data)) * 255
 
 
+def root_mean_square_error(original_image, output_image):
+    return np.sqrt(np.mean((original_image - output_image) ** 2))
+
+
 if __name__ == "__main__":
     st.title("Symulator tomografu komputerowego")
-    number_of_detectors = st.slider("Liczba detektorów", 60, 270, 120, 10)
+    number_of_detectors = st.slider("Liczba detektorów", 60, 360, 120, 10)
     angle = st.slider("Krok alfa emitera", 1, 10, 1, 1)
     span = st.slider("Rozpiętość układu", 10, 270, 120, 10)
     uploaded_file = st.file_uploader("Podaj plik", type=['png', 'jpeg', 'jpg', 'bmp'])
@@ -157,11 +165,13 @@ if __name__ == "__main__":
         image = Image.open(uploaded_file).convert("L")
         img = np.asarray(image)
 
-        sinus_out, sinogram_parts = radon_transform(number_of_detectors, angle, span, img)
+        num_of_iterations = int(360 / angle)
+        sinus_out, sinogram_parts = radon_transform(number_of_detectors, num_of_iterations, span, img)
         sinus_out = np.array(sinus_out)
         sinus_out_rescaled = normalize(sinus_out)
 
-        end_image, end_image_parts = inverse_radon(sinus_out_rescaled, angle, img, span, number_of_detectors,
+        end_image, end_image_parts = inverse_radon(sinus_out_rescaled, num_of_iterations, img, span,
+                                                   number_of_detectors,
                                                    filter_checkbox)
         end_image = np.array(end_image)
         end_image_rescaled = normalize(end_image)
@@ -169,8 +179,9 @@ if __name__ == "__main__":
         st.session_state["end_image"] = end_image_rescaled
 
         if iterations:
-            selected_iteration = st.slider("Wybierz iterację", 1, int(360 / angle), int(360 / angle))
-            st.image(uploaded_file, caption="Basic image")
+            st.write("RMSE", root_mean_square_error(normalize(img), end_image_rescaled))
+            selected_iteration = st.slider("Wybierz iterację", 1, num_of_iterations, num_of_iterations)
+            st.image(image, caption="Basic image")
 
             sin_selected = sinogram_parts[selected_iteration - 1]
             sin_selected = normalize(sin_selected)
@@ -184,6 +195,7 @@ if __name__ == "__main__":
             st.image(sin_selected, caption="Sinogram")
             st.image(img_selected, caption="Output image")
         else:
+            st.write("RMSE", root_mean_square_error(normalize(img), end_image_rescaled))
             st.image(uploaded_file, caption="Basic image")
 
             sinus_out_rescaled = np.uint8(sinus_out_rescaled)
@@ -191,4 +203,3 @@ if __name__ == "__main__":
 
             end_image_rescaled = np.uint8(end_image_rescaled)
             st.image(end_image_rescaled, caption="Output image")
-        st.session_state.clicked = False
